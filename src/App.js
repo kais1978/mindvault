@@ -1,37 +1,79 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from "react";
 
-const TODAY_ID = new Date().toISOString().slice(0, 10).replaceAll('-', '');
+const TODAY_KEY = new Date().toISOString().slice(0, 10);
+const TODAY_ID = TODAY_KEY.replaceAll("-", "");
 
 const DOORS = [
-  { name: 'Pattern', shard: 'Pattern Shard', icon: '◆' },
-  { name: 'Maze', shard: 'Path Shard', icon: '✦' },
-  { name: 'Number', shard: 'Number Shard', icon: '24' },
-  { name: 'Shadow', shard: 'Shadow Shard', icon: '◈' },
-  { name: 'Cipher', shard: 'Cipher Shard', icon: '⌘' },
+  { name: "Pattern", shard: "Pattern Shard", icon: "◆" },
+  { name: "Maze", shard: "Path Shard", icon: "✦" },
+  { name: "Number", shard: "Number Shard", icon: "24" },
+  { name: "Shadow", shard: "Shadow Shard", icon: "◈" },
+  { name: "Cipher", shard: "Cipher Shard", icon: "⌘" },
 ];
 
 const DAILY_BADGES = [
-  'Neon Key',
-  'Glass Compass',
-  'Violet Flame',
-  'Silver Circuit',
-  'Star Prism',
-  'Golden Gate',
-  'Crown of Focus',
+  "Neon Key",
+  "Glass Compass",
+  "Violet Flame",
+  "Silver Circuit",
+  "Star Prism",
+  "Golden Gate",
+  "Crown of Focus",
 ];
 
+const SYMBOLS = ["◆", "●", "■", "▲", "◇", "✦"];
+const CIPHER_SYMBOLS = ["▲", "◆", "●", "■", "◇", "✦"];
+
+function hashString(str) {
+  let h = 2166136261;
+
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+
+  return h >>> 0;
+}
+
+function createRng(seedString) {
+  let seed = hashString(seedString);
+
+  return function rng() {
+    seed += 0x6d2b79f5;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function pick(rng, arr) {
+  return arr[Math.floor(rng() * arr.length)];
+}
+
+function shuffle(rng, arr) {
+  const copy = [...arr];
+
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+
+  return copy;
+}
+
 function formatTime(totalSeconds) {
-  const m = Math.floor(totalSeconds / 60);
-  const s = totalSeconds % 60;
-  return `${m}:${String(s).padStart(2, '0')}`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 function getRank(seconds, mistakes) {
-  if (mistakes === 0 && seconds <= 360) return 'S';
-  if (mistakes <= 1 && seconds <= 480) return 'A';
-  if (mistakes <= 3) return 'B';
-  if (mistakes <= 5) return 'C';
-  return 'D';
+  if (mistakes === 0 && seconds <= 360) return "S";
+  if (mistakes <= 1 && seconds <= 480) return "A";
+  if (mistakes <= 3) return "B";
+  if (mistakes <= 5) return "C";
+  return "D";
 }
 
 function getPrecision(mistakes) {
@@ -39,11 +81,240 @@ function getPrecision(mistakes) {
 }
 
 function getTodayBadge() {
-  const day = new Date().getDay();
-  return DAILY_BADGES[day];
+  return DAILY_BADGES[new Date().getDay()];
 }
 
+function getWeekNumber(date = new Date()) {
+  const d = new Date(
+    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())
+  );
+
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
+}
+
+function safeReadWeek() {
+  try {
+    return JSON.parse(localStorage.getItem("mindvault_week") || "[]");
+  } catch {
+    return [];
+  }
+}
+
+/* ---------------- DAILY PUZZLE GENERATORS ---------------- */
+
+function generatePatternPuzzle(seed) {
+  const rng = createRng(seed + "-pattern");
+  const pool = shuffle(rng, SYMBOLS).slice(0, 3);
+  const offset = Math.floor(rng() * 3);
+
+  const grid = Array.from({ length: 3 }, (_, row) =>
+    Array.from({ length: 3 }, (_, col) => pool[(col + row + offset) % 3])
+  );
+
+  const answer = grid[2][2];
+  grid[2][2] = "?";
+
+  const wrongAnswers = SYMBOLS.filter((symbol) => symbol !== answer);
+  const options = shuffle(rng, [
+    answer,
+    ...shuffle(rng, wrongAnswers).slice(0, 3),
+  ]);
+
+  return {
+    grid,
+    answer,
+    options,
+    explanation: "Each row shifts one step forward.",
+  };
+}
+
+function generateMazePuzzle(seed) {
+  const rng = createRng(seed + "-maze");
+
+  const start = { r: 0, c: 0 };
+  const exit = { r: 4, c: 4 };
+
+  const path = [];
+  let r = 0;
+  let c = 0;
+
+  path.push("0,0");
+
+  while (r < 4 || c < 4) {
+    if (r === 4) {
+      c++;
+    } else if (c === 4) {
+      r++;
+    } else if (rng() < 0.5) {
+      r++;
+    } else {
+      c++;
+    }
+
+    path.push(`${r},${c}`);
+  }
+
+  const pathSet = new Set(path);
+  const nonPathCells = [];
+
+  for (let row = 0; row < 5; row++) {
+    for (let col = 0; col < 5; col++) {
+      const key = `${row},${col}`;
+      if (!pathSet.has(key)) {
+        nonPathCells.push(key);
+      }
+    }
+  }
+
+  const walls = new Set(shuffle(rng, nonPathCells).slice(0, 6));
+
+  const orbCandidates = path.filter((key) => key !== "0,0" && key !== "4,4");
+  const orbs = new Set(shuffle(rng, orbCandidates).slice(0, 3));
+
+  return {
+    start,
+    exit,
+    walls,
+    orbs,
+  };
+}
+
+function generateNumberPuzzle(seed) {
+  const rng = createRng(seed + "-number");
+  const mode = pick(rng, ["add", "multiply", "square"]);
+
+  let sequence;
+  let rule;
+
+  if (mode === "add") {
+    const start = 2 + Math.floor(rng() * 8);
+    const step = 2 + Math.floor(rng() * 9);
+
+    sequence = [0, 1, 2, 3, 4].map((i) => start + i * step);
+    rule = `Add ${step} each time.`;
+  } else if (mode === "multiply") {
+    const start = 2 + Math.floor(rng() * 5);
+    const factor = pick(rng, [2, 3]);
+
+    sequence = [0, 1, 2, 3, 4].map((i) => start * Math.pow(factor, i));
+    rule = `Multiply by ${factor} each time.`;
+  } else {
+    const start = 2 + Math.floor(rng() * 5);
+
+    sequence = [0, 1, 2, 3, 4].map((i) => Math.pow(start + i, 2));
+    rule = "The numbers are consecutive squares.";
+  }
+
+  const missingIndex = 1 + Math.floor(rng() * 3);
+  const answer = String(sequence[missingIndex]);
+
+  const display = sequence.map(String);
+  display[missingIndex] = "?";
+
+  const wrongs = new Set();
+
+  while (wrongs.size < 3) {
+    const offset = pick(rng, [-12, -9, -6, -4, -3, 3, 4, 6, 9, 12]);
+    const wrong = Math.max(1, Number(answer) + offset);
+
+    if (String(wrong) !== answer) {
+      wrongs.add(String(wrong));
+    }
+  }
+
+  return {
+    sequence: display,
+    missingIndex,
+    answer,
+    options: shuffle(rng, [answer, ...Array.from(wrongs)]),
+    rule,
+  };
+}
+
+function generateShadowPuzzle(seed) {
+  const rng = createRng(seed + "-shadow");
+
+  const allCells = Array.from({ length: 9 }, (_, i) => {
+    const row = Math.floor(i / 3);
+    const col = i % 3;
+    return `${row},${col}`;
+  });
+
+  const count = 3 + Math.floor(rng() * 3);
+
+  return {
+    pattern: new Set(shuffle(rng, allCells).slice(0, count)),
+    watchMs: 2400,
+  };
+}
+
+function generateCipherPuzzle(seed) {
+  const rng = createRng(seed + "-cipher");
+
+  const symbols = shuffle(rng, CIPHER_SYMBOLS).slice(0, 4);
+  const digits = shuffle(rng, ["1", "2", "3", "4", "5", "6", "7", "8", "9"]).slice(
+    0,
+    4
+  );
+
+  const map = symbols.map((symbol, index) => ({
+    symbol,
+    value: digits[index],
+  }));
+
+  const codeSymbols = Array.from({ length: 4 }, () => pick(rng, symbols));
+
+  const answer = codeSymbols
+    .map((symbol) => map.find((item) => item.symbol === symbol).value)
+    .join("");
+
+  return {
+    map,
+    codeSymbols,
+    answer,
+  };
+}
+
+function generateWeeklyRelic(seed) {
+  const rng = createRng(seed + "-weekly");
+
+  return {
+    name: pick(rng, [
+      "The Seven-Gate Seal",
+      "The Obsidian Crown",
+      "The Chrono Prism",
+      "The Mindforge Relic",
+      "The Arc Key",
+    ]),
+    difficulty: pick(rng, ["Hard", "Expert", "Master"]),
+  };
+}
+
+function generateDailyVault(dateKey) {
+  return {
+    pattern: generatePatternPuzzle(dateKey),
+    maze: generateMazePuzzle(dateKey),
+    number: generateNumberPuzzle(dateKey),
+    shadow: generateShadowPuzzle(dateKey),
+    cipher: generateCipherPuzzle(dateKey),
+  };
+}
+
+/* ---------------- MAIN APP ---------------- */
+
 export default function App() {
+  const dailyVault = useMemo(() => generateDailyVault(TODAY_KEY), []);
+
+  const weeklyRelic = useMemo(() => {
+    const week = getWeekNumber();
+    const year = new Date().getFullYear();
+    return generateWeeklyRelic(`${year}-W${week}`);
+  }, []);
+
   const [started, setStarted] = useState(false);
   const [doorIndex, setDoorIndex] = useState(0);
   const [openedDoors, setOpenedDoors] = useState([]);
@@ -51,25 +322,19 @@ export default function App() {
   const [mistakes, setMistakes] = useState(0);
   const [completed, setCompleted] = useState(false);
   const [reward, setReward] = useState(null);
-  const [dailyBadgeEarned, setDailyBadgeEarned] = useState(false);
+  const [weekVersion, setWeekVersion] = useState(0);
 
   const rank = getRank(seconds, mistakes);
   const precision = getPrecision(mistakes);
   const todayBadge = getTodayBadge();
 
-  const weeklyBadges = useMemo(() => {
-    try {
-      return JSON.parse(localStorage.getItem('mindvault_week') || '[]');
-    } catch {
-      return [];
-    }
-  }, [dailyBadgeEarned]);
+  const weeklyBadges = useMemo(() => safeReadWeek(), [weekVersion]);
 
   useEffect(() => {
     if (!started || completed || reward) return;
 
     const timer = setInterval(() => {
-      setSeconds((prev) => prev + 1);
+      setSeconds((previous) => previous + 1);
     }, 1000);
 
     return () => clearInterval(timer);
@@ -78,11 +343,10 @@ export default function App() {
   function completeDoor() {
     const door = DOORS[doorIndex];
 
-    setOpenedDoors((prev) => [...new Set([...prev, doorIndex])]);
+    setOpenedDoors((previous) => [...new Set([...previous, doorIndex])]);
 
     setTimeout(() => {
       setReward({
-        type: 'shard',
         title: `${door.shard} Earned`,
         icon: door.icon,
         subtitle: `${doorIndex + 1}/5 vault shards collected`,
@@ -102,17 +366,12 @@ export default function App() {
         return;
       }
 
-      let saved = [];
-      try {
-        saved = JSON.parse(localStorage.getItem('mindvault_week') || '[]');
-      } catch {
-        saved = [];
-      }
-
+      const saved = safeReadWeek();
       const updated = [...new Set([...saved, todayBadge])].slice(0, 7);
-      localStorage.setItem('mindvault_week', JSON.stringify(updated));
 
-      setDailyBadgeEarned(true);
+      localStorage.setItem("mindvault_week", JSON.stringify(updated));
+
+      setWeekVersion((previous) => previous + 1);
       setCompleted(true);
     }, 80);
   }
@@ -125,7 +384,6 @@ export default function App() {
     setMistakes(0);
     setCompleted(false);
     setReward(null);
-    setDailyBadgeEarned(false);
   }
 
   async function shareResult() {
@@ -143,7 +401,7 @@ Weekly Relic: ${weeklyBadges.length}/7 badges`;
 
     try {
       await navigator.clipboard.writeText(text);
-      alert('Result copied.');
+      alert("Result copied.");
     } catch {
       alert(text);
     }
@@ -159,6 +417,7 @@ Weekly Relic: ${weeklyBadges.length}/7 badges`;
             <StartScreen
               todayBadge={todayBadge}
               weeklyCount={weeklyBadges.length}
+              weeklyRelic={weeklyRelic}
               onStart={() => setStarted(true)}
             />
           )}
@@ -170,39 +429,45 @@ Weekly Relic: ${weeklyBadges.length}/7 badges`;
                 seconds={seconds}
                 mistakes={mistakes}
               />
+
               <DoorRow activeDoor={doorIndex} openedDoors={openedDoors} />
 
               {doorIndex === 0 && (
                 <PatternDoor
-                  onMistake={() => setMistakes((m) => m + 1)}
+                  puzzle={dailyVault.pattern}
+                  onMistake={() => setMistakes((previous) => previous + 1)}
                   onSolved={completeDoor}
                 />
               )}
 
               {doorIndex === 1 && (
                 <MazeDoor
-                  onMistake={() => setMistakes((m) => m + 1)}
+                  puzzle={dailyVault.maze}
+                  onMistake={() => setMistakes((previous) => previous + 1)}
                   onSolved={completeDoor}
                 />
               )}
 
               {doorIndex === 2 && (
                 <MissingNumberDoor
-                  onMistake={() => setMistakes((m) => m + 1)}
+                  puzzle={dailyVault.number}
+                  onMistake={() => setMistakes((previous) => previous + 1)}
                   onSolved={completeDoor}
                 />
               )}
 
               {doorIndex === 3 && (
                 <ShadowDoor
-                  onMistake={() => setMistakes((m) => m + 1)}
+                  puzzle={dailyVault.shadow}
+                  onMistake={() => setMistakes((previous) => previous + 1)}
                   onSolved={completeDoor}
                 />
               )}
 
               {doorIndex === 4 && (
                 <CipherDoor
-                  onMistake={() => setMistakes((m) => m + 1)}
+                  puzzle={dailyVault.cipher}
+                  onMistake={() => setMistakes((previous) => previous + 1)}
                   onSolved={completeDoor}
                 />
               )}
@@ -217,6 +482,7 @@ Weekly Relic: ${weeklyBadges.length}/7 badges`;
               precision={precision}
               todayBadge={todayBadge}
               weeklyCount={weeklyBadges.length}
+              weeklyRelic={weeklyRelic}
               onShare={shareResult}
               onReplay={resetGame}
             />
@@ -231,7 +497,9 @@ Weekly Relic: ${weeklyBadges.length}/7 badges`;
   );
 }
 
-function StartScreen({ todayBadge, weeklyCount, onStart }) {
+/* ---------------- UI COMPONENTS ---------------- */
+
+function StartScreen({ todayBadge, weeklyCount, weeklyRelic, onStart }) {
   return (
     <>
       <div className="topline">
@@ -248,14 +516,16 @@ function StartScreen({ todayBadge, weeklyCount, onStart }) {
           </h1>
 
           <p className="subtitle">
-            Open five logic doors. Earn five shards. Forge today’s badge and
-            move closer to the Weekly Relic.
+            Open five logic doors. Earn five shards. Forge today’s badge and move
+            closer to the Weekly Relic.
           </p>
 
           <div className="weekly-card">
             <span>Today’s Badge</span>
             <strong>{todayBadge}</strong>
-            <small>Weekly Relic Progress: {weeklyCount}/7 badges</small>
+            <small>
+              Weekly Relic: {weeklyRelic.name} · {weeklyCount}/7 badges
+            </small>
           </div>
 
           <button type="button" className="primary-btn" onClick={onStart}>
@@ -265,7 +535,7 @@ function StartScreen({ todayBadge, weeklyCount, onStart }) {
       </section>
 
       <p className="footer">
-        Five short puzzles. One daily badge. Seven badges unlock the relic.
+        New generated vault every day. Same puzzle for everyone today.
       </p>
     </>
   );
@@ -306,6 +576,7 @@ function FinalScreen({
   precision,
   todayBadge,
   weeklyCount,
+  weeklyRelic,
   onShare,
   onReplay,
 }) {
@@ -328,6 +599,7 @@ function FinalScreen({
           <div className="badge-ring">
             <div className="badge-core">◆</div>
           </div>
+
           <strong>{todayBadge}</strong>
           <span>Daily Badge Earned</span>
         </div>
@@ -356,17 +628,19 @@ function FinalScreen({
           </div>
         </div>
 
-        <div className={`relic-card ${relicUnlocked ? 'unlocked' : ''}`}>
+        <div className={`relic-card ${relicUnlocked ? "unlocked" : ""}`}>
           <span>
-            {relicUnlocked ? 'Weekly Relic Unlocked' : 'Weekly Relic Progress'}
+            {relicUnlocked ? "Weekly Relic Unlocked" : "Weekly Relic Progress"}
           </span>
+
           <strong>
-            {relicUnlocked ? 'The Seven-Gate Seal' : `${weeklyCount}/7 Badges`}
+            {relicUnlocked ? weeklyRelic.name : `${weeklyCount}/7 Badges`}
           </strong>
+
           <small>
             {relicUnlocked
-              ? 'A harder relic puzzle is now available.'
-              : 'Collect all 7 daily badges to unlock the relic puzzle.'}
+              ? `${weeklyRelic.difficulty} relic puzzle ready.`
+              : `Collect all 7 daily badges to unlock ${weeklyRelic.name}.`}
           </small>
         </div>
 
@@ -385,17 +659,17 @@ function FinalScreen({
 function DoorRow({ activeDoor, openedDoors }) {
   return (
     <div className="doors">
-      {DOORS.map((door, i) => (
+      {DOORS.map((door, index) => (
         <div
           key={door.name}
-          className={`door ${activeDoor === i ? 'active' : ''} ${
-            openedDoors.includes(i) ? 'open' : ''
+          className={`door ${activeDoor === index ? "active" : ""} ${
+            openedDoors.includes(index) ? "open" : ""
           }`}
         >
           <div className="door-light" />
           <div className="door-left" />
           <div className="door-right" />
-          <div className="door-number">{i + 1}</div>
+          <div className="door-number">{index + 1}</div>
           <div className="door-title">{door.name}</div>
         </div>
       ))}
@@ -405,19 +679,17 @@ function DoorRow({ activeDoor, openedDoors }) {
 
 function BigOpeningDoor({ open, label }) {
   return (
-    <div className={`big-door ${open ? 'big-door-open' : ''}`}>
+    <div className={`big-door ${open ? "big-door-open" : ""}`}>
       <div className="big-door-light" />
       <div className="big-door-left" />
       <div className="big-door-right" />
-      <div className="big-door-lock">{open ? '🔓' : '🔒'}</div>
+      <div className="big-door-lock">{open ? "🔓" : "🔒"}</div>
       <div className="big-door-label">{label}</div>
     </div>
   );
 }
 
 function RewardModal({ reward, onContinue }) {
-  const current = reward.current || Number(reward.subtitle?.split('/')[0]) || 1;
-
   return (
     <div className="modal-backdrop">
       <section className="reward-card">
@@ -441,14 +713,13 @@ function RewardModal({ reward, onContinue }) {
         </div>
 
         <h2>{reward.title}</h2>
-
         <p>{reward.subtitle}</p>
 
         <div className="shard-progress">
           {[1, 2, 3, 4, 5].map((n) => (
             <div
               key={n}
-              className={`shard-dot ${n <= current ? 'filled' : ''}`}
+              className={`shard-dot ${n <= reward.current ? "filled" : ""}`}
             />
           ))}
         </div>
@@ -469,28 +740,25 @@ function RewardModal({ reward, onContinue }) {
   );
 }
 
-function PatternDoor({ onMistake, onSolved }) {
-  const [grid, setGrid] = useState([
-    ['◆', '●', '■'],
-    ['●', '■', '◆'],
-    ['■', '◆', '?'],
-  ]);
+/* ---------------- DOOR COMPONENTS ---------------- */
 
+function PatternDoor({ puzzle, onMistake, onSolved }) {
+  const [grid, setGrid] = useState(puzzle.grid);
   const [status, setStatus] = useState(null);
 
-  const answer = '●';
-  const options = ['◆', '●', '■', '▲'];
-
   function choose(option) {
-    if (status === 'correct') return;
+    if (status === "correct") return;
 
-    if (option === answer) {
-      setGrid((old) =>
-        old.map((row) => row.map((cell) => (cell === '?' ? answer : cell)))
+    if (option === puzzle.answer) {
+      setGrid((oldGrid) =>
+        oldGrid.map((row) =>
+          row.map((cell) => (cell === "?" ? puzzle.answer : cell))
+        )
       );
-      setStatus('correct');
+
+      setStatus("correct");
     } else {
-      setStatus('wrong');
+      setStatus("wrong");
       onMistake();
     }
   }
@@ -498,21 +766,24 @@ function PatternDoor({ onMistake, onSolved }) {
   return (
     <section className="panel">
       <div className="content">
-        <BigOpeningDoor open={status === 'correct'} label="Door 1" />
+        <BigOpeningDoor open={status === "correct"} label="Door 1" />
 
         <div className="lock-label">Door 1</div>
         <h2 className="lock-title">Pattern Door</h2>
+
         <p className="lock-desc">
           Complete the missing symbol. The pattern shifts one step each row.
         </p>
 
         <div className="pattern-grid">
-          {grid.flatMap((row, r) =>
-            row.map((cell, c) => (
+          {grid.flatMap((row, rowIndex) =>
+            row.map((cell, colIndex) => (
               <div
-                key={`${r}-${c}`}
-                className={`pattern-cell ${cell === '?' ? 'missing' : ''} ${
-                  status === 'correct' && r === 2 && c === 2 ? 'filled' : ''
+                key={`${rowIndex}-${colIndex}`}
+                className={`pattern-cell ${cell === "?" ? "missing" : ""} ${
+                  status === "correct" && rowIndex === 2 && colIndex === 2
+                    ? "filled"
+                    : ""
                 }`}
               >
                 {cell}
@@ -522,7 +793,7 @@ function PatternDoor({ onMistake, onSolved }) {
         </div>
 
         <div className="options">
-          {options.map((option) => (
+          {puzzle.options.map((option) => (
             <button
               type="button"
               key={option}
@@ -534,17 +805,16 @@ function PatternDoor({ onMistake, onSolved }) {
           ))}
         </div>
 
-        {status === 'wrong' && (
+        {status === "wrong" && (
           <div className="feedback bad">
             Not that one. Watch how the row rotates forward.
           </div>
         )}
 
-        {status === 'correct' && (
+        {status === "correct" && (
           <>
-            <div className="feedback good">
-              Correct. Pattern Shard unlocked.
-            </div>
+            <div className="feedback good">Correct. {puzzle.explanation}</div>
+
             <button type="button" className="primary-btn" onClick={onSolved}>
               Claim Shard
             </button>
@@ -555,65 +825,59 @@ function PatternDoor({ onMistake, onSolved }) {
   );
 }
 
-function MazeDoor({ onMistake, onSolved }) {
-  const walls = useMemo(
-    () => new Set(['0,3', '1,1', '1,3', '2,1', '3,3', '4,1']),
-    []
-  );
-
-  const initialOrbs = useMemo(() => new Set(['0,4', '2,2', '4,0']), []);
-
-  const [player, setPlayer] = useState({ r: 0, c: 0 });
-  const [orbs, setOrbs] = useState(initialOrbs);
+function MazeDoor({ puzzle, onMistake, onSolved }) {
+  const [player, setPlayer] = useState(puzzle.start);
+  const [orbs, setOrbs] = useState(new Set(puzzle.orbs));
   const [message, setMessage] = useState(
-    'Collect all three energy orbs, then reach the exit.'
+    "Collect all three energy orbs, then reach the exit."
   );
 
-  const exit = { r: 4, c: 4 };
   const allOrbsCollected = orbs.size === 0;
   const reachedExit =
-    player.r === exit.r && player.c === exit.c && allOrbsCollected;
+    player.r === puzzle.exit.r &&
+    player.c === puzzle.exit.c &&
+    allOrbsCollected;
 
-  function keyOf(r, c) {
-    return `${r},${c}`;
+  function keyOf(row, col) {
+    return `${row},${col}`;
   }
 
-  function move(dr, dc) {
+  function move(rowChange, colChange) {
     if (reachedExit) return;
 
-    const nr = player.r + dr;
-    const nc = player.c + dc;
+    const nextRow = player.r + rowChange;
+    const nextCol = player.c + colChange;
 
-    if (nr < 0 || nr > 4 || nc < 0 || nc > 4) {
-      setMessage('Wall hit. Stay inside the vault path.');
+    if (nextRow < 0 || nextRow > 4 || nextCol < 0 || nextCol > 4) {
+      setMessage("Wall hit. Stay inside the vault path.");
       onMistake();
       return;
     }
 
-    if (walls.has(keyOf(nr, nc))) {
-      setMessage('Blocked path. Choose another route.');
+    if (puzzle.walls.has(keyOf(nextRow, nextCol))) {
+      setMessage("Blocked path. Choose another route.");
       onMistake();
       return;
     }
 
-    const nextKey = keyOf(nr, nc);
+    const nextKey = keyOf(nextRow, nextCol);
     const nextOrbs = new Set(orbs);
 
     if (nextOrbs.has(nextKey)) {
       nextOrbs.delete(nextKey);
-      setMessage('Energy collected.');
+      setMessage("Energy collected.");
     } else {
-      setMessage('Keep moving. Collect all orbs before the exit.');
+      setMessage("Keep moving. Collect all orbs before the exit.");
     }
 
     setOrbs(nextOrbs);
-    setPlayer({ r: nr, c: nc });
+    setPlayer({ r: nextRow, c: nextCol });
 
-    if (nr === exit.r && nc === exit.c) {
+    if (nextRow === puzzle.exit.r && nextCol === puzzle.exit.c) {
       if (nextOrbs.size === 0) {
-        setMessage('Exit unlocked. Path Shard unlocked.');
+        setMessage("Exit unlocked. Path Shard unlocked.");
       } else {
-        setMessage('The exit is locked. Collect all energy orbs first.');
+        setMessage("The exit is locked. Collect all energy orbs first.");
         onMistake();
       }
     }
@@ -626,38 +890,40 @@ function MazeDoor({ onMistake, onSolved }) {
 
         <div className="lock-label">Door 2</div>
         <h2 className="lock-title">Maze Door</h2>
+
         <p className="lock-desc">
           Move the key. Collect all energy orbs, then reach the purple exit.
         </p>
 
         <div className="maze">
-          {Array.from({ length: 25 }).map((_, i) => {
-            const r = Math.floor(i / 5);
-            const c = i % 5;
-            const k = keyOf(r, c);
-            const isPlayer = player.r === r && player.c === c;
-            const isWall = walls.has(k);
-            const isOrb = orbs.has(k);
-            const isExit = exit.r === r && exit.c === c;
+          {Array.from({ length: 25 }).map((_, index) => {
+            const row = Math.floor(index / 5);
+            const col = index % 5;
+            const key = keyOf(row, col);
+
+            const isPlayer = player.r === row && player.c === col;
+            const isWall = puzzle.walls.has(key);
+            const isOrb = orbs.has(key);
+            const isExit = puzzle.exit.r === row && puzzle.exit.c === col;
 
             return (
               <div
-                key={k}
-                className={`maze-cell ${isWall ? 'wall' : ''} ${
-                  isOrb ? 'orb' : ''
-                } ${isExit ? 'exit' : ''} ${isPlayer ? 'player' : ''}`}
+                key={key}
+                className={`maze-cell ${isWall ? "wall" : ""} ${
+                  isOrb ? "orb" : ""
+                } ${isExit ? "exit" : ""} ${isPlayer ? "player" : ""}`}
               >
                 {isPlayer
-                  ? '🔑'
+                  ? "🔑"
                   : isWall
-                  ? '×'
+                  ? "×"
                   : isOrb
-                  ? '✦'
+                  ? "✦"
                   : isExit
                   ? allOrbsCollected
-                    ? '⟐'
-                    : '🔒'
-                  : ''}
+                    ? "⟐"
+                    : "🔒"
+                  : ""}
               </div>
             );
           })}
@@ -665,31 +931,25 @@ function MazeDoor({ onMistake, onSolved }) {
 
         <div className="movement">
           <div />
-          <button
-            type="button"
-            className="move-btn"
-            onClick={() => move(-1, 0)}
-          >
+          <button type="button" className="move-btn" onClick={() => move(-1, 0)}>
             ↑
           </button>
           <div />
 
-          <button
-            type="button"
-            className="move-btn"
-            onClick={() => move(0, -1)}
-          >
+          <button type="button" className="move-btn" onClick={() => move(0, -1)}>
             ←
           </button>
+
           <button type="button" className="move-btn" onClick={() => move(1, 0)}>
             ↓
           </button>
+
           <button type="button" className="move-btn" onClick={() => move(0, 1)}>
             →
           </button>
         </div>
 
-        <div className={reachedExit ? 'feedback good' : 'feedback bad'}>
+        <div className={reachedExit ? "feedback good" : "feedback bad"}>
           {message}
         </div>
 
@@ -703,25 +963,18 @@ function MazeDoor({ onMistake, onSolved }) {
   );
 }
 
-function MissingNumberDoor({ onMistake, onSolved }) {
-  const puzzle = {
-    sequence: ['3', '6', '12', '?', '48'],
-    answer: '24',
-    options: ['18', '21', '24', '30'],
-    rule: 'Each number doubles from left to right.',
-  };
-
+function MissingNumberDoor({ puzzle, onMistake, onSolved }) {
   const [status, setStatus] = useState(null);
-  const [filledAnswer, setFilledAnswer] = useState('?');
+  const [filledAnswer, setFilledAnswer] = useState("?");
 
   function choose(option) {
-    if (status === 'correct') return;
+    if (status === "correct") return;
 
     if (option === puzzle.answer) {
       setFilledAnswer(option);
-      setStatus('correct');
+      setStatus("correct");
     } else {
-      setStatus('wrong');
+      setStatus("wrong");
       onMistake();
     }
   }
@@ -729,10 +982,11 @@ function MissingNumberDoor({ onMistake, onSolved }) {
   return (
     <section className="panel">
       <div className="content">
-        <BigOpeningDoor open={status === 'correct'} label="Door 3" />
+        <BigOpeningDoor open={status === "correct"} label="Door 3" />
 
         <div className="lock-label">Door 3</div>
         <h2 className="lock-title">Number Door</h2>
+
         <p className="lock-desc">
           Find the missing number. Look at the rule from left to right.
         </p>
@@ -741,11 +995,15 @@ function MissingNumberDoor({ onMistake, onSolved }) {
           {puzzle.sequence.map((value, index) => (
             <div
               key={index}
-              className={`number-cell ${index === 3 ? 'missing-number' : ''} ${
-                status === 'correct' && index === 3 ? 'number-filled' : ''
+              className={`number-cell ${
+                index === puzzle.missingIndex ? "missing-number" : ""
+              } ${
+                status === "correct" && index === puzzle.missingIndex
+                  ? "number-filled"
+                  : ""
               }`}
             >
-              {index === 3 ? filledAnswer : value}
+              {index === puzzle.missingIndex ? filledAnswer : value}
             </div>
           ))}
         </div>
@@ -763,17 +1021,14 @@ function MissingNumberDoor({ onMistake, onSolved }) {
           ))}
         </div>
 
-        {status === 'wrong' && (
-          <div className="feedback bad">
-            Not that one. Try the doubling rule.
-          </div>
+        {status === "wrong" && (
+          <div className="feedback bad">Not that one. Look for the rule.</div>
         )}
 
-        {status === 'correct' && (
+        {status === "correct" && (
           <>
-            <div className="feedback good">
-              Correct. The missing number is {puzzle.answer}. {puzzle.rule}
-            </div>
+            <div className="feedback good">Correct. {puzzle.rule}</div>
+
             <button type="button" className="primary-btn" onClick={onSolved}>
               Claim Shard
             </button>
@@ -784,37 +1039,39 @@ function MissingNumberDoor({ onMistake, onSolved }) {
   );
 }
 
-function ShadowDoor({ onMistake, onSolved }) {
-  const pattern = useMemo(() => new Set(['0,1', '1,0', '1,2', '2,2']), []);
-  const [phase, setPhase] = useState('watch');
+function ShadowDoor({ puzzle, onMistake, onSolved }) {
+  const [phase, setPhase] = useState("watch");
   const [selected, setSelected] = useState(new Set());
   const [status, setStatus] = useState(null);
 
   useEffect(() => {
-    const t = setTimeout(() => setPhase('repeat'), 2600);
-    return () => clearTimeout(t);
-  }, []);
+    const timer = setTimeout(() => setPhase("repeat"), puzzle.watchMs);
+    return () => clearTimeout(timer);
+  }, [puzzle.watchMs]);
 
-  function toggleCell(r, c) {
-    if (phase !== 'repeat' || status === 'correct') return;
+  function toggleCell(row, col) {
+    if (phase !== "repeat" || status === "correct") return;
 
-    const key = `${r},${c}`;
-    const next = new Set(selected);
+    const key = `${row},${col}`;
+    const nextSelected = new Set(selected);
 
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
+    if (nextSelected.has(key)) {
+      nextSelected.delete(key);
+    } else {
+      nextSelected.add(key);
+    }
 
-    setSelected(next);
+    setSelected(nextSelected);
   }
 
   function checkPattern() {
-    const sameSize = selected.size === pattern.size;
-    const allCorrect = [...pattern].every((key) => selected.has(key));
+    const sameSize = selected.size === puzzle.pattern.size;
+    const allCorrect = [...puzzle.pattern].every((key) => selected.has(key));
 
     if (sameSize && allCorrect) {
-      setStatus('correct');
+      setStatus("correct");
     } else {
-      setStatus('wrong');
+      setStatus("wrong");
       onMistake();
     }
   }
@@ -822,58 +1079,54 @@ function ShadowDoor({ onMistake, onSolved }) {
   return (
     <section className="panel">
       <div className="content">
-        <BigOpeningDoor open={status === 'correct'} label="Door 4" />
+        <BigOpeningDoor open={status === "correct"} label="Door 4" />
 
         <div className="lock-label">Door 4</div>
         <h2 className="lock-title">Shadow Door</h2>
+
         <p className="lock-desc">
           Memorize the glowing tiles. When they disappear, repeat the pattern.
         </p>
 
         <div className="shadow-board">
-          {Array.from({ length: 9 }).map((_, i) => {
-            const r = Math.floor(i / 3);
-            const c = i % 3;
-            const key = `${r},${c}`;
-            const showGlow = phase === 'watch' && pattern.has(key);
+          {Array.from({ length: 9 }).map((_, index) => {
+            const row = Math.floor(index / 3);
+            const col = index % 3;
+            const key = `${row},${col}`;
+
+            const showGlow = phase === "watch" && puzzle.pattern.has(key);
             const isSelected = selected.has(key);
 
             return (
               <button
                 type="button"
                 key={key}
-                className={`shadow-cell ${showGlow ? 'shadow-glow' : ''} ${
-                  isSelected ? 'shadow-selected' : ''
+                className={`shadow-cell ${showGlow ? "shadow-glow" : ""} ${
+                  isSelected ? "shadow-selected" : ""
                 }`}
-                onClick={() => toggleCell(r, c)}
+                onClick={() => toggleCell(row, col)}
               />
             );
           })}
         </div>
 
-        <div
-          className={status === 'correct' ? 'feedback good' : 'feedback bad'}
-        >
-          {phase === 'watch'
-            ? 'Watch carefully...'
-            : status === 'correct'
-            ? 'Correct. Shadow Shard unlocked.'
-            : status === 'wrong'
-            ? 'Not quite. Try to remember the glowing positions.'
-            : 'Repeat the shadow pattern.'}
+        <div className={status === "correct" ? "feedback good" : "feedback bad"}>
+          {phase === "watch"
+            ? "Watch carefully..."
+            : status === "correct"
+            ? "Correct. Shadow Shard unlocked."
+            : status === "wrong"
+            ? "Not quite. Try to remember the glowing positions."
+            : "Repeat the shadow pattern."}
         </div>
 
-        {phase === 'repeat' && status !== 'correct' && (
-          <button
-            type="button"
-            className="secondary-btn"
-            onClick={checkPattern}
-          >
+        {phase === "repeat" && status !== "correct" && (
+          <button type="button" className="secondary-btn" onClick={checkPattern}>
             Check Pattern
           </button>
         )}
 
-        {status === 'correct' && (
+        {status === "correct" && (
           <button type="button" className="primary-btn" onClick={onSolved}>
             Claim Shard
           </button>
@@ -883,36 +1136,26 @@ function ShadowDoor({ onMistake, onSolved }) {
   );
 }
 
-function CipherDoor({ onMistake, onSolved }) {
-  const symbols = [
-    { symbol: '▲', value: '2' },
-    { symbol: '◆', value: '4' },
-    { symbol: '●', value: '6' },
-  ];
-
-  const codeSymbols = ['▲', '◆', '●', '▲'];
-  const answer = '2462';
-  const [input, setInput] = useState('');
+function CipherDoor({ puzzle, onMistake, onSolved }) {
+  const [input, setInput] = useState("");
   const [status, setStatus] = useState(null);
 
   function pressDigit(digit) {
-    if (status === 'correct') return;
-    if (input.length >= 4) return;
-
-    setInput((prev) => prev + digit);
+    if (status === "correct" || input.length >= 4) return;
+    setInput((previous) => previous + digit);
   }
 
   function clear() {
-    if (status === 'correct') return;
-    setInput('');
+    if (status === "correct") return;
+    setInput("");
     setStatus(null);
   }
 
   function check() {
-    if (input === answer) {
-      setStatus('correct');
+    if (input === puzzle.answer) {
+      setStatus("correct");
     } else {
-      setStatus('wrong');
+      setStatus("wrong");
       onMistake();
     }
   }
@@ -920,16 +1163,15 @@ function CipherDoor({ onMistake, onSolved }) {
   return (
     <section className="panel">
       <div className="content">
-        <BigOpeningDoor open={status === 'correct'} label="Door 5" />
+        <BigOpeningDoor open={status === "correct"} label="Door 5" />
 
         <div className="lock-label">Door 5</div>
         <h2 className="lock-title">Cipher Door</h2>
-        <p className="lock-desc">
-          Decode the symbols and enter the final vault code.
-        </p>
+
+        <p className="lock-desc">Decode the symbols and enter the final vault code.</p>
 
         <div className="cipher-key">
-          {symbols.map((item) => (
+          {puzzle.map.map((item) => (
             <div key={item.symbol} className="cipher-map">
               <strong>{item.symbol}</strong>
               <span>=</span>
@@ -939,48 +1181,52 @@ function CipherDoor({ onMistake, onSolved }) {
         </div>
 
         <div className="cipher-code">
-          {codeSymbols.map((s, i) => (
-            <div key={`${s}-${i}`} className="cipher-symbol">
-              {s}
+          {puzzle.codeSymbols.map((symbol, index) => (
+            <div key={`${symbol}-${index}`} className="cipher-symbol">
+              {symbol}
             </div>
           ))}
         </div>
 
-        <div className="code-display">{input.padEnd(4, '•')}</div>
+        <div className="code-display">{input.padEnd(4, "•")}</div>
 
         <div className="keypad">
-          {['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'].map((digit) => (
-            <button
-              type="button"
-              key={digit}
-              className="key-btn"
-              onClick={() => pressDigit(digit)}
-            >
-              {digit}
-            </button>
-          ))}
+          {["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"].map(
+            (digit) => (
+              <button
+                type="button"
+                key={digit}
+                className="key-btn"
+                onClick={() => pressDigit(digit)}
+              >
+                {digit}
+              </button>
+            )
+          )}
         </div>
 
         <div className="cipher-actions">
           <button type="button" className="secondary-btn" onClick={clear}>
             Clear
           </button>
+
           <button type="button" className="primary-btn no-top" onClick={check}>
             Unlock
           </button>
         </div>
 
-        {status === 'wrong' && (
+        {status === "wrong" && (
           <div className="feedback bad">
             Wrong code. Decode each symbol carefully.
           </div>
         )}
 
-        {status === 'correct' && (
+        {status === "correct" && (
           <>
             <div className="feedback good">
               Correct. Cipher Shard unlocked. The Daily Badge is ready.
             </div>
+
             <button type="button" className="primary-btn" onClick={onSolved}>
               Forge Daily Badge
             </button>
@@ -991,24 +1237,34 @@ function CipherDoor({ onMistake, onSolved }) {
   );
 }
 
+/* ---------------- CSS ---------------- */
+
 const css = `
 * {
   box-sizing: border-box;
 }
 
-body {
+html,
+body,
+#root {
   margin: 0;
+  width: 100%;
+  min-height: 100%;
   background: #07070b;
+}
+
+body {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 .screen {
-  min-height: 100vh;
+  min-height: 100svh;
+  width: 100%;
   color: white;
   display: flex;
   justify-content: center;
-  align-items: center;
-  padding: 28px 16px;
+  align-items: flex-start;
+  padding: 18px 12px;
   background:
     radial-gradient(circle at top left, rgba(0, 240, 255, 0.18), transparent 32%),
     radial-gradient(circle at bottom right, rgba(255, 0, 122, 0.15), transparent 35%),
@@ -1017,7 +1273,7 @@ body {
 
 .app {
   width: 100%;
-  max-width: 500px;
+  max-width: 520px;
 }
 
 .topline {
@@ -1062,6 +1318,7 @@ h1 {
 .hero,
 .panel,
 .result-card {
+  width: 100%;
   border: 1px solid rgba(255,255,255,0.10);
   background:
     linear-gradient(145deg, rgba(255,255,255,0.08), rgba(255,255,255,0.025)),
@@ -1111,7 +1368,7 @@ h1 {
   margin-top: 22px;
   border: 0;
   border-radius: 22px;
-  padding: 16px 18px;
+  padding: 17px 18px;
   background: #00f0ff;
   color: #030309;
   font-weight: 950;
@@ -1423,25 +1680,30 @@ h1 {
   margin: 0 0 18px;
 }
 
-.pattern-grid {
+.pattern-grid,
+.shadow-board {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  gap: 11px;
   margin: 18px 0;
 }
 
-.pattern-cell {
+.pattern-cell,
+.shadow-cell {
   aspect-ratio: 1;
   border-radius: 22px;
+  background: #0c0c13;
+  border: 1px solid rgba(255,255,255,0.10);
+  transition: 220ms ease;
+}
+
+.pattern-cell {
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 38px;
   font-weight: 900;
-  background: #0c0c13;
-  border: 1px solid rgba(255,255,255,0.10);
   box-shadow: inset 0 0 22px rgba(255,255,255,0.025);
-  transition: 220ms ease;
 }
 
 .pattern-cell.missing {
@@ -1455,6 +1717,22 @@ h1 {
   border-color: rgba(0,240,255,0.65);
   box-shadow: 0 0 32px rgba(0,240,255,0.28);
   transform: scale(1.03);
+}
+
+.shadow-cell {
+  cursor: pointer;
+}
+
+.shadow-glow {
+  background: rgba(0,240,255,0.22);
+  border-color: rgba(0,240,255,0.85);
+  box-shadow: 0 0 34px rgba(0,240,255,0.45);
+}
+
+.shadow-selected {
+  background: rgba(112,0,255,0.25);
+  border-color: rgba(112,0,255,0.85);
+  box-shadow: 0 0 28px rgba(112,0,255,0.32);
 }
 
 .options {
@@ -1568,10 +1846,6 @@ h1 {
   cursor: pointer;
 }
 
-.move-btn:hover {
-  border-color: rgba(0,240,255,0.45);
-}
-
 .number-sequence {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -1618,38 +1892,10 @@ h1 {
   font-weight: 950;
 }
 
-.shadow-board {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-  margin-top: 18px;
-}
-
-.shadow-cell {
-  aspect-ratio: 1;
-  border-radius: 22px;
-  border: 1px solid rgba(255,255,255,0.10);
-  background: #0c0c13;
-  cursor: pointer;
-  transition: 200ms ease;
-}
-
-.shadow-glow {
-  background: rgba(0,240,255,0.22);
-  border-color: rgba(0,240,255,0.85);
-  box-shadow: 0 0 34px rgba(0,240,255,0.45);
-}
-
-.shadow-selected {
-  background: rgba(112,0,255,0.25);
-  border-color: rgba(112,0,255,0.85);
-  box-shadow: 0 0 28px rgba(112,0,255,0.32);
-}
-
 .cipher-key {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
   margin-top: 18px;
 }
 
@@ -1657,16 +1903,16 @@ h1 {
   border: 1px solid rgba(255,255,255,0.10);
   background: rgba(255,255,255,0.045);
   border-radius: 18px;
-  padding: 14px 10px;
+  padding: 12px 8px;
   display: flex;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
 }
 
 .cipher-map strong {
   color: #00f0ff;
-  font-size: 24px;
+  font-size: 22px;
 }
 
 .cipher-map span {
@@ -1675,7 +1921,7 @@ h1 {
 
 .cipher-map em {
   color: white;
-  font-size: 20px;
+  font-size: 18px;
   font-style: normal;
   font-weight: 950;
 }
@@ -1916,6 +2162,7 @@ h1 {
     transform: translateY(0) scale(1);
     opacity: 0.55;
   }
+
   50% {
     transform: translateY(-10px) scale(1.12);
     opacity: 1;
@@ -1930,8 +2177,7 @@ h1 {
   display: flex;
   align-items: center;
   justify-content: center;
-  background:
-    conic-gradient(from 90deg, #00f0ff, #7000ff, #ff007a, #00f0ff);
+  background: conic-gradient(from 90deg, #00f0ff, #7000ff, #ff007a, #00f0ff);
   box-shadow:
     0 0 65px rgba(0,240,255,0.34),
     0 0 95px rgba(112,0,255,0.22);
@@ -1943,6 +2189,7 @@ h1 {
     transform: scale(1);
     filter: brightness(1);
   }
+
   50% {
     transform: scale(1.035);
     filter: brightness(1.2);
@@ -2023,8 +2270,7 @@ h1 {
   border: 0;
   border-radius: 22px;
   padding: 17px 18px;
-  background:
-    linear-gradient(90deg, #00f0ff, #5ef7ff);
+  background: linear-gradient(90deg, #00f0ff, #5ef7ff);
   color: #030309;
   font-weight: 1000;
   font-size: 15px;
@@ -2037,15 +2283,6 @@ h1 {
   z-index: 5;
 }
 
-.claim-btn:hover {
-  transform: translateY(-2px);
-  filter: brightness(1.05);
-}
-
-.claim-btn:active {
-  transform: scale(0.98);
-}
-
 .footer {
   color: #696978;
   text-align: center;
@@ -2054,20 +2291,48 @@ h1 {
   margin-top: 16px;
 }
 
-@media (max-width: 420px) {
-  h1 {
-    font-size: 42px;
+@media (max-width: 768px) {
+  .screen {
+    min-height: 100svh;
+    padding: 14px 10px;
+    align-items: flex-start;
+  }
+
+  .app {
+    width: 100%;
+    max-width: 100%;
   }
 
   .hero,
   .panel,
   .result-card {
-    border-radius: 28px;
-    padding: 20px;
+    width: 100%;
+    border-radius: 26px;
+    padding: 18px;
+  }
+
+  h1 {
+    font-size: 46px;
+  }
+
+  .subtitle {
+    font-size: 16px;
+    line-height: 1.55;
+  }
+
+  .primary-btn,
+  .start-btn {
+    padding: 18px;
+    font-size: 16px;
+  }
+
+  .doors {
+    gap: 6px;
   }
 
   .door {
     height: 86px;
+    border-radius: 15px;
   }
 
   .door-title {
@@ -2091,8 +2356,8 @@ h1 {
     font-size: 25px;
   }
 
-  .doors {
-    gap: 6px;
+  .cipher-key {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 `;
